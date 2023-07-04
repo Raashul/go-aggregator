@@ -1,53 +1,71 @@
 package main
 
 import (
-	"fmt"
+	"database/sql"
 	"log"
 	"net/http"
 	"os"
 
-	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi"
 	"github.com/go-chi/cors"
 	"github.com/joho/godotenv"
+
+	"github.com/Raashul/go-aggregator/internal/database"
+
+	_ "github.com/lib/pq"
 )
+
+type apiConfig struct {
+	DB *database.Queries
+}
 
 func main() {
 	godotenv.Load(".env")
 
-	portString := os.Getenv("PORT")
-	if portString == "" {
-		log.Fatal("PORT is not found in the environment")
+	port := os.Getenv("PORT")
+	if port == "" {
+		log.Fatal("PORT environment variable is not set")
+	}
+
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		log.Fatal("DATABASE_URL environment variable is not set")
+	}
+
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatal(err)
+	}
+	dbQueries := database.New(db)
+
+	apiCfg := apiConfig{
+		DB: dbQueries,
 	}
 
 	router := chi.NewRouter()
-	  // Basic CORS
-  // for more ideas, see: https://developer.github.com/v3/#cross-origin-resource-sharing
-  router.Use(cors.Handler(cors.Options{
-    // AllowedOrigins:   []string{"https://foo.com"}, // Use this to allow specific origin hosts
-    AllowedOrigins:   []string{"https://*", "http://*"},
-    // AllowOriginFunc:  func(r *http.Request, origin string) bool { return true },
-    AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-    AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
-    ExposedHeaders:   []string{"Link"},
-    AllowCredentials: false,
-    MaxAge:           300, // Maximum value not ignored by any of major browsers
-  }))
+
+	router.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{"https://*", "http://*"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"*"},
+		ExposedHeaders:   []string{"Link"},
+		AllowCredentials: false,
+		MaxAge:           300,
+	}))
 
 	v1Router := chi.NewRouter()
+
+	v1Router.Post("/users", apiCfg.handlerUsersCreate)
+
 	v1Router.Get("/healthz", handlerReadiness)
 	v1Router.Get("/err", handlerErr)
 
 	router.Mount("/v1", v1Router)
-
 	srv := &http.Server{
+		Addr:    ":" + port,
 		Handler: router,
-		Addr: ":" + portString,
-	}
-	fmt.Printf("Server starting onport %v", portString)
-	err  := srv.ListenAndServe()
-	if err != nil {
-		log.Fatal(err)
 	}
 
-	fmt.Println("PORT: ", portString)
+	log.Printf("Serving on port: %s\n", port)
+	log.Fatal(srv.ListenAndServe())
 }

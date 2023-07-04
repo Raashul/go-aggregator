@@ -19,25 +19,8 @@ var _ Router = &Mux{}
 // particularly useful for writing large REST API services that break a handler
 // into many smaller parts composed of middlewares and end handlers.
 type Mux struct {
-	// The computed mux handler made of the chained middleware stack and
-	// the tree router
-	handler http.Handler
-
 	// The radix trie router
 	tree *node
-
-	// Custom method not allowed handler
-	methodNotAllowedHandler http.HandlerFunc
-
-	// A reference to the parent mux used by subrouters when mounting
-	// to a parent mux
-	parent *Mux
-
-	// Routing context pool
-	pool *sync.Pool
-
-	// Custom route not found handler
-	notFoundHandler http.HandlerFunc
 
 	// The middleware stack
 	middlewares []func(http.Handler) http.Handler
@@ -45,6 +28,20 @@ type Mux struct {
 	// Controls the behaviour of middleware chain generation when a mux
 	// is registered as an inline group inside another mux.
 	inline bool
+	parent *Mux
+
+	// The computed mux handler made of the chained middleware stack and
+	// the tree router
+	handler http.Handler
+
+	// Routing context pool
+	pool *sync.Pool
+
+	// Custom route not found handler
+	notFoundHandler http.HandlerFunc
+
+	// Custom method not allowed handler
+	methodNotAllowedHandler http.HandlerFunc
 }
 
 // NewMux returns a newly initialized Mux object that implements the Router
@@ -191,17 +188,16 @@ func (mx *Mux) Trace(pattern string, handlerFn http.HandlerFunc) {
 func (mx *Mux) NotFound(handlerFn http.HandlerFunc) {
 	// Build NotFound handler chain
 	m := mx
-	hFn := handlerFn
+	h := Chain(mx.middlewares...).HandlerFunc(handlerFn).ServeHTTP
 	if mx.inline && mx.parent != nil {
 		m = mx.parent
-		hFn = Chain(mx.middlewares...).HandlerFunc(hFn).ServeHTTP
 	}
 
 	// Update the notFoundHandler from this point forward
-	m.notFoundHandler = hFn
+	m.notFoundHandler = h
 	m.updateSubRoutes(func(subMux *Mux) {
 		if subMux.notFoundHandler == nil {
-			subMux.NotFound(hFn)
+			subMux.NotFound(h)
 		}
 	})
 }
@@ -211,17 +207,16 @@ func (mx *Mux) NotFound(handlerFn http.HandlerFunc) {
 func (mx *Mux) MethodNotAllowed(handlerFn http.HandlerFunc) {
 	// Build MethodNotAllowed handler chain
 	m := mx
-	hFn := handlerFn
+	h := Chain(mx.middlewares...).HandlerFunc(handlerFn).ServeHTTP
 	if mx.inline && mx.parent != nil {
 		m = mx.parent
-		hFn = Chain(mx.middlewares...).HandlerFunc(hFn).ServeHTTP
 	}
 
 	// Update the methodNotAllowedHandler from this point forward
-	m.methodNotAllowedHandler = hFn
+	m.methodNotAllowedHandler = h
 	m.updateSubRoutes(func(subMux *Mux) {
 		if subMux.methodNotAllowedHandler == nil {
-			subMux.MethodNotAllowed(hFn)
+			subMux.MethodNotAllowed(h)
 		}
 	})
 }
@@ -423,9 +418,6 @@ func (mx *Mux) routeHTTP(w http.ResponseWriter, r *http.Request) {
 			routePath = r.URL.RawPath
 		} else {
 			routePath = r.URL.Path
-		}
-		if routePath == "" {
-			routePath = "/"
 		}
 	}
 
